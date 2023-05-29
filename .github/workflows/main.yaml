@@ -36,10 +36,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          path: avatar-mod-winrt
+          path: avatar-mod-dx12
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v1.1
         with:
           msbuild-architecture: x64
       - name: Build
-        run: msbuild avatar-mod-winrt/avatar-mod-winrt.vcxproj -t:rebuild -property:Configuration=Debug -interactive:False -nologo
+        run: msbuild avatar-mod-dx12/avatar-mod-dx12.vcxproj -t:rebuild -property:Configuration=Debug -interactive:False -nologo
