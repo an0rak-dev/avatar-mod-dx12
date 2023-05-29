@@ -1,0 +1,42 @@
+name: Validate PullRequest
+
+on:
+  pull_request:
+
+jobs:
+  fetch-dependencies:
+    name: Fetch dependencies of the project.
+    runs-on: ubuntu-latest
+    steps:
+        - name: Checkout engine code
+          uses: actions/checkout@v3
+          with:
+            repository: an0rak-dev/avatar-engine
+            ref: main # On PR testing, we match the latest code of the engine
+            path: avatar-engine
+        - name: Save engine includes
+          uses: actions/upload-artifact@v3
+          with:
+            name: engine-includes
+            path: avatar-engine/includes
+            retention-days: 1
+  build-sources:
+    name: Build the source code
+    runs-on: windows-latest
+    needs: fetch-dependencies
+    steps:
+      - name: Retrieve Engine includes
+        uses: actions/download-artifact@v3
+        with:
+          name: engine-includes
+          path: avatar-engine/includes
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          path: avatar-mod-winrt
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1.1
+        with:
+          msbuild-architecture: x64
+      - name: Build
+        run: msbuild avatar-mod-winrt/avatar-mod-winrt.vcxproj -t:rebuild -property:Configuration=Debug -interactive:False -nologo
