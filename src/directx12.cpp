@@ -4,20 +4,28 @@
 #include <stdio.h>
 #include <wrl/client.h>
 #include <d3d12.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 
 #define SWAPCHAIN_BUFFERS_COUNT 2
+#define RELEASE(elt) if (NULL != elt) elt->Release()
 
 struct dx12_specifics {
 	IDXGIFactory2* factory;
 	IDXGIAdapter1* adapter;
 	ID3D12Device* device;
 	ID3D12CommandQueue* command_queue;
-	IDXGISwapChain1* swapchain;
+	IDXGISwapChain3* swapchain;
 	ID3D12DescriptorHeap* rtv_descriptor_heap;
 	ID3D12Resource* render_target_views[SWAPCHAIN_BUFFERS_COUNT];
 	ID3D12CommandAllocator* command_allocator;
+	ID3D12PipelineState* pipeline_state_object;
+	ID3D12GraphicsCommandList* command_list;
+	ID3D12Fence* fence;
+	unsigned int fence_value;
+	HANDLE fence_event;
 };
+
+void wait_for_sync(dx12_renderer& renderer);
 
 int dx12_allocate(dx12_renderer* renderer) {
 	if (NULL == renderer) {
@@ -39,6 +47,10 @@ int dx12_allocate(dx12_renderer* renderer) {
 		specifics->render_target_views[i] = NULL;
 	}
 	specifics->command_allocator = NULL;
+	specifics->pipeline_state_object = NULL;
+	specifics->command_list = NULL;
+	specifics->fence = NULL;
+	specifics->fence_value = 0;
 
 	renderer->specifics = specifics;
 	return 0;
@@ -49,22 +61,33 @@ void dX12_destroy(dx12_renderer* renderer) {
 		return;
 	}
 
-	renderer->specifics->command_allocator->Release();
+	CloseHandle(renderer->specifics->fence_event);
+	RELEASE(renderer->specifics->fence);
+	RELEASE(renderer->specifics->command_list);
+	RELEASE(renderer->specifics->pipeline_state_object);
+	RELEASE(renderer->specifics->command_allocator);
 	for (int i = 0; i < SWAPCHAIN_BUFFERS_COUNT; i++) {
-		renderer->specifics->render_target_views[i]->Release();
+		RELEASE(renderer->specifics->render_target_views[i]);
 	}
-	renderer->specifics->rtv_descriptor_heap->Release();
-	renderer->specifics->swapchain->Release();
-	renderer->specifics->command_queue->Release();
-	renderer->specifics->device->Release();
-	renderer->specifics->adapter->Release();
-	renderer->specifics->factory->Release();
+	RELEASE(renderer->specifics->rtv_descriptor_heap);
+	RELEASE(renderer->specifics->swapchain);
+	RELEASE(renderer->specifics->command_queue);
+	RELEASE(renderer->specifics->device);
+	RELEASE(renderer->specifics->adapter);
+	RELEASE(renderer->specifics->factory);
 	free(renderer->specifics);
 }
 
 int dx12_initialize(dx12_renderer& renderer, HWND attached_window) {
 	HRESULT result = S_OK;
 	struct dx12_specifics* pipeline = renderer.specifics;
+
+#if defined(_DEBUG)
+	ID3D12Debug* debug_controller;
+	D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller));
+	debug_controller->EnableDebugLayer();
+#endif
+
 	// Factory
 	result = CreateDXGIFactory1(IID_PPV_ARGS(&pipeline->factory));
 	if (S_OK != result) {
@@ -123,10 +146,12 @@ int dx12_initialize(dx12_renderer& renderer, HWND attached_window) {
 	swapchain_description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	swapchain_description.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
 	swapchain_description.Flags = 0;
-	result = pipeline->factory->CreateSwapChainForHwnd(pipeline->command_queue, attached_window, &swapchain_description, NULL, NULL, &pipeline->swapchain);
+	IDXGISwapChain1* tmp_swapchain;
+	result = pipeline->factory->CreateSwapChainForHwnd(pipeline->command_queue, attached_window, &swapchain_description, NULL, NULL, &tmp_swapchain);
 	if (S_OK != result) {
 		return 4;
 	}
+	pipeline->swapchain = (IDXGISwapChain3*)tmp_swapchain;
 
 	// DescriptorHeap
 	D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_description = {};
@@ -148,20 +173,81 @@ int dx12_initialize(dx12_renderer& renderer, HWND attached_window) {
 		descriptor_handle.ptr += descriptor_unit_size;
 	}
 
-	// Create Command Allocator
+	// Command Allocator
 	result = pipeline->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pipeline->command_allocator));
 	if (S_OK != result) {
 		return 6;
 	}
 
+	// Command List
+	result = pipeline->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pipeline->command_allocator, pipeline->pipeline_state_object, IID_PPV_ARGS(&pipeline->command_list));
+	if (S_OK != result) {
+		return 7;
+	}
+	pipeline->command_list->Close();
+
+	// Fence
+	result = pipeline->device->CreateFence(pipeline->fence_value, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pipeline->fence));
+	if (S_OK != result) {
+		return 8;
+	}
+	pipeline->fence_event = CreateEvent(NULL, false, false, NULL);
+	if (NULL == pipeline->fence_event) {
+		return 9;
+	}
+	wait_for_sync(renderer);
+
 	return 0;	
 }
 
-void dx12_clear(dx12_renderer& renderer, double red, double green, double blue, double alpha) {
-	// TODO
+void dx12_prepare(dx12_renderer& renderer) {
+	renderer.specifics->command_allocator->Reset();
+	renderer.specifics->command_list->Reset(renderer.specifics->command_allocator, renderer.specifics->pipeline_state_object);
+	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
+	D3D12_RESOURCE_BARRIER barrier = {};
+	barrier.Transition.pResource = renderer.specifics->render_target_views[current_frame_idx];
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	renderer.specifics->command_list->ResourceBarrier(1, &barrier);
+}
+
+void dx12_clear(dx12_renderer& renderer, float red, float green, float blue, float alpha) {
+	const float bg_color[] = { red, green, blue, alpha };
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = renderer.specifics->rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+	unsigned int descriptor_unit_size = renderer.specifics->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
+	rtv_handle.ptr += current_frame_idx * descriptor_unit_size;
+	renderer.specifics->command_list->ClearRenderTargetView(rtv_handle, bg_color, 0, NULL);
 }
 
 int dx12_present(dx12_renderer& renderer) {
-	// TODO
+	HRESULT result = S_OK;
+	D3D12_RESOURCE_BARRIER barrier = {};
+	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
+	barrier.Transition.pResource = renderer.specifics->render_target_views[current_frame_idx];
+	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	renderer.specifics->command_list->ResourceBarrier(1, &barrier);
+	renderer.specifics->command_list->Close();
+	ID3D12CommandList* command_lists[] = { renderer.specifics->command_list };
+	renderer.specifics->command_queue->ExecuteCommandLists(1, command_lists);
+	result = renderer.specifics->swapchain->Present(1, 0);
+	if (S_OK != result) {
+		return 1;
+	}
+	wait_for_sync(renderer);
 	return 0;
+}
+
+void wait_for_sync(dx12_renderer& renderer) {
+	struct dx12_specifics* pipeline = renderer.specifics;
+	unsigned int current_value = pipeline->fence_value;
+	pipeline->command_queue->Signal(pipeline->fence, current_value);
+	pipeline->fence_value++;
+	if (pipeline->fence->GetCompletedValue() < current_value) {
+		pipeline->fence->SetEventOnCompletion(current_value, pipeline->fence_event);
+		WaitForSingleObject(pipeline->fence_event, INFINITE);
+	}
 }
