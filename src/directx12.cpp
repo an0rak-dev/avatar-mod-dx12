@@ -26,6 +26,7 @@ struct dx12_specifics {
 };
 
 void wait_for_sync(dx12_renderer& renderer);
+void add_transition_barrier(dx12_renderer& renderer, bool to_present_mode);
 
 int dx12_allocate(dx12_renderer* renderer) {
 	if (NULL == renderer) {
@@ -203,13 +204,7 @@ int dx12_initialize(dx12_renderer& renderer, HWND attached_window) {
 void dx12_prepare(dx12_renderer& renderer) {
 	renderer.specifics->command_allocator->Reset();
 	renderer.specifics->command_list->Reset(renderer.specifics->command_allocator, renderer.specifics->pipeline_state_object);
-	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
-	D3D12_RESOURCE_BARRIER barrier = {};
-	barrier.Transition.pResource = renderer.specifics->render_target_views[current_frame_idx];
-	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	renderer.specifics->command_list->ResourceBarrier(1, &barrier);
+	add_transition_barrier(renderer, false);
 }
 
 void dx12_clear(dx12_renderer& renderer, float red, float green, float blue, float alpha) {
@@ -223,13 +218,7 @@ void dx12_clear(dx12_renderer& renderer, float red, float green, float blue, flo
 
 int dx12_present(dx12_renderer& renderer) {
 	HRESULT result = S_OK;
-	D3D12_RESOURCE_BARRIER barrier = {};
-	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
-	barrier.Transition.pResource = renderer.specifics->render_target_views[current_frame_idx];
-	barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-	barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	renderer.specifics->command_list->ResourceBarrier(1, &barrier);
+	add_transition_barrier(renderer, true);
 	renderer.specifics->command_list->Close();
 	ID3D12CommandList* command_lists[] = { renderer.specifics->command_list };
 	renderer.specifics->command_queue->ExecuteCommandLists(1, command_lists);
@@ -250,4 +239,14 @@ void wait_for_sync(dx12_renderer& renderer) {
 		pipeline->fence->SetEventOnCompletion(current_value, pipeline->fence_event);
 		WaitForSingleObject(pipeline->fence_event, INFINITE);
 	}
+}
+
+void add_transition_barrier(dx12_renderer& renderer, bool to_present_mode) {
+	D3D12_RESOURCE_BARRIER barrier = {};
+	unsigned int current_frame_idx = renderer.specifics->swapchain->GetCurrentBackBufferIndex();
+	barrier.Transition.pResource = renderer.specifics->render_target_views[current_frame_idx];
+	barrier.Transition.StateBefore = to_present_mode ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT;
+	barrier.Transition.StateAfter = to_present_mode ? D3D12_RESOURCE_STATE_PRESENT : D3D12_RESOURCE_STATE_RENDER_TARGET;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	renderer.specifics->command_list->ResourceBarrier(1, &barrier);
 }
