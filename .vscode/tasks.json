@@ -1,0 +1,68 @@
+{
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "[Renderer - DirectX 12] Build",
+            "dependsOn": "[Renderer - DirectX 12] Compile",
+            "command": "lib.exe",
+            "args": [
+                "/nologo",
+                "/out:${workspaceFolder}\\Bin\\avatar-mod-dx12.lib",
+                "d3d12.lib",
+                "dxgi.lib",
+                "*.obj"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}\\Bin"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Build the Avatar DirectX 12 Renderer static library."
+        },
+        {
+            "type": "cppbuild",
+            "label": "[Renderer - DirectX 12] Compile",
+            "dependsOn": "[Renderer - DirectX 12] Prepare",
+            "command": "cl.exe",
+            "args": [
+                "/Zi",
+                "/EHsc",
+                "/FC",
+                "/nologo",
+                "/c",
+                "/DUNICODE",
+                "/I${workspaceFolder}\\..\\avatar-engine\\includes",
+                "/I${workspaceFolder}\\includes",
+                "${workspaceFolder}\\src\\*.cpp"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}\\Bin"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "detail": "Compile all the sources of the DirectX 12 Renderer module."
+        },
+        {
+          "type":"shell",
+          "label": "[Renderer - DirectX 12] Prepare",
+          "windows":{
+            "command": "cmd.exe",
+            "args": [
+                "/C",
+                "${workspaceFolder}\\.vscode\\prepare.bat"
+            ]
+          },
+        }
+    ],
+    "version": "2.0.0"
+}

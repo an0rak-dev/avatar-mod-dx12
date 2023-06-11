@@ -1,4 +1,5 @@
 Universe/
 .vs/ 
 *x64/
+Bin
 *.vcxproj.user
